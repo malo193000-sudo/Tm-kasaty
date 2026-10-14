@@ -18,6 +18,11 @@ import {
   Check,
   Edit2,
   Sparkles,
+  Package,
+  Cloud,
+  CheckCircle2,
+  Phone,
+  MessageCircle,
 } from 'lucide-react';
 
 export const AdminCMSModal: React.FC = () => {
@@ -42,10 +47,14 @@ export const AdminCMSModal: React.FC = () => {
     exportBackup,
     importBackup,
     openImageEditor,
+    orders,
+    updateOrderStatus,
+    syncStatus,
+    forceSyncToCloud,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'general' | 'hero' | 'products' | 'reviews' | 'faqs' | 'articles' | 'backup'
+    'orders' | 'general' | 'hero' | 'products' | 'reviews' | 'faqs' | 'articles' | 'backup'
   >('general');
 
   // Local editing states
@@ -112,6 +121,7 @@ export const AdminCMSModal: React.FC = () => {
   };
 
   const tabs = [
+    { id: 'orders', label: `طلبات العملاء (${orders.length})`, icon: Package },
     { id: 'general', label: 'المعلومات والترويسة', icon: Settings },
     { id: 'hero', label: 'البنر الرئيسي', icon: Sparkles },
     { id: 'products', label: `القصص والمنتجات (${config.products.length})`, icon: BookOpen },
@@ -181,6 +191,171 @@ export const AdminCMSModal: React.FC = () => {
 
           {/* Tab Content Panel */}
           <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-6">
+            {/* Firebase Live Cloud Banner */}
+            <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-pink-50 p-3 rounded-2xl border border-purple-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <span className="font-bold text-slate-800 block">
+                    قاعدة بيانات Firebase متصلة: <code className="text-purple-700 bg-purple-100 px-1 rounded font-mono">tm-kasaty</code>
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    {syncStatus === 'synced'
+                      ? '✓ جميع التعديلات محفوظة وتظهر فورياً لجميع الزوار'
+                      : syncStatus === 'saving'
+                      ? '⏳ جاري الحفظ في السحابة...'
+                      : 'سحابة غير متصلة مؤقتاً، تعمل التعديلات محلياً'}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await forceSyncToCloud();
+                  showToast('تمت المزامنة بنجاح مع Firebase!');
+                }}
+                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold rounded-xl shadow cursor-pointer transition-colors"
+              >
+                مزامنة فورية الآن ☁️
+              </button>
+            </div>
+
+            {/* 0. Orders Management Tab */}
+            {activeTab === 'orders' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">
+                      طلبات الشراء الواردة من العملاء ({orders.length})
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      تُسجل الطلبات فورياً في Firebase عند إتمام العميل للطلب في المتجر
+                    </p>
+                  </div>
+                </div>
+
+                {orders.length === 0 ? (
+                  <div className="p-12 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500 text-xs font-semibold">
+                    لا توجد طلبات جديدة بعد. ستظهر هنا فور قيام أي عميل بطلب قصة من المتجر!
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {orders.map((ord) => (
+                      <div
+                        key={ord.id}
+                        className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-purple-700 bg-purple-100 px-2 py-0.5 rounded-lg text-xs">
+                              {ord.orderNumber}
+                            </span>
+                            <span className="font-bold text-slate-900 text-sm">
+                              {ord.customerName}
+                            </span>
+                            <span className="text-slate-400 text-xs font-mono" dir="ltr">
+                              {ord.phone}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {/* Status changer */}
+                            <select
+                              value={ord.status}
+                              onChange={(e) => updateOrderStatus(ord.id, e.target.value as any)}
+                              className={`text-xs font-bold px-2 py-1 rounded-lg border ${
+                                ord.status === 'delivered'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  : ord.status === 'shipped'
+                                  ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                  : ord.status === 'processing'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                  : 'bg-purple-50 text-purple-800 border-purple-300'
+                              }`}
+                            >
+                              <option value="new">طلب جديد 🆕</option>
+                              <option value="processing">قيد الطباعة والتجهيز ⏳</option>
+                              <option value="shipped">تم الشحن مع المندوب 🚚</option>
+                              <option value="delivered">تم التوصيل بنجاح ✅</option>
+                            </select>
+
+                            {/* WhatsApp Direct link */}
+                            <a
+                              href={`https://wa.me/${ord.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                                `مرحباً ${ord.customerName}، نتواصل معك بخصوص طلبك رقم ${ord.orderNumber} من متجر قصتي.`
+                              )}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" /> واتساب
+                            </a>
+                          </div>
+                        </div>
+
+                        {/* Customer Address & Payment */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600 bg-slate-50 p-2.5 rounded-xl font-medium">
+                          <div>
+                            <strong>العنوان:</strong> {ord.city} - {ord.address}
+                          </div>
+                          <div>
+                            <strong>طريقة الدفع:</strong> {ord.paymentMethod}
+                          </div>
+                          <div>
+                            <strong>المبلغ الإجمالي:</strong>{' '}
+                            <span className="font-bold text-purple-700">{ord.totalAmount} ج.م</span>
+                          </div>
+                        </div>
+
+                        {/* Items in the order */}
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[11px] font-bold text-slate-400 block">
+                            القصص المطلوبة:
+                          </span>
+                          <div className="space-y-1">
+                            {ord.items.map((item, i) => (
+                              <div
+                                key={i}
+                                className="flex items-center justify-between text-xs bg-purple-50/40 p-2 rounded-lg border border-purple-100"
+                              >
+                                <div className="flex items-center gap-2">
+                                  {item.childPhotoUrl && (
+                                    <img
+                                      src={item.childPhotoUrl}
+                                      alt=""
+                                      className="w-7 h-7 rounded-full object-cover border"
+                                    />
+                                  )}
+                                  <span>
+                                    <strong>{item.product.title}</strong> (اسم الطفل:{' '}
+                                    <span className="text-purple-700 font-bold">{item.childName}</span> - عمره:{' '}
+                                    {item.childAge} سنوات - {item.childGender === 'boy' ? 'ولد' : 'بنت'})
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {item.giftPackaging && (
+                                    <span className="text-[10px] text-pink-600 font-bold">
+                                      🎁 تغليف هدية
+                                    </span>
+                                  )}
+                                  <span className="font-bold text-slate-800">
+                                    العدد: {item.quantity}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 1. General & Header Tab */}
             {activeTab === 'general' && (
               <div className="space-y-5 max-w-3xl">

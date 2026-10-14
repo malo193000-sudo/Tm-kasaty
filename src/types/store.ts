@@ -123,3 +123,20 @@ export interface StoreConfig {
   footerAbout: string;
   footerCopyright: string;
 }
+
+export interface OrderRecord {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  phone: string;
+  city: string;
+  address: string;
+  notes?: string;
+  paymentMethod: string;
+  totalAmount: number;
+  currency: string;
+  items: CartItem[];
+  status: 'new' | 'processing' | 'shipped' | 'delivered';
+  createdAt: string;
+}
+

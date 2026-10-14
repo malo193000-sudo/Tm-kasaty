@@ -24,6 +24,7 @@ export const CheckoutModal: React.FC = () => {
     formatPrice,
     config,
     storiesCount,
+    submitNewOrder,
   } = useStore();
 
   const [fullName, setFullName] = useState('');
@@ -33,30 +34,55 @@ export const CheckoutModal: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cod' | 'card' | 'wallet'>('cod');
   const [orderPlaced, setOrderPlaced] = useState<{ id: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isCheckoutOpen) return null;
 
-  const handlePlaceOrder = (e: React.FormEvent) => {
+  const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !phone.trim() || !address.trim()) {
       alert('يرجى استكمال جميع بيانات التوصيل المطلوبة');
       return;
     }
 
-    const orderId = 'KST-' + Math.floor(100000 + Math.random() * 900000);
-    setOrderPlaced({ id: orderId });
+    setIsSubmitting(true);
+    const orderNumber = 'KST-' + Math.floor(100000 + Math.random() * 900000);
 
     try {
-      confetti({
-        particleCount: 120,
-        spread: 80,
-        origin: { y: 0.6 },
+      await submitNewOrder({
+        orderNumber,
+        customerName: fullName.trim(),
+        phone: phone.trim(),
+        city: city.trim(),
+        address: address.trim(),
+        notes: notes.trim(),
+        paymentMethod: paymentMethod === 'cod' ? 'الدفع عند الاستلام' : paymentMethod === 'wallet' ? 'فودافون كاش / إنستاباي' : 'بطاقة بنكية',
+        totalAmount: cartTotal,
+        currency: 'EGP',
+        items: cartItems,
       });
-    } catch {
-      // ignore
-    }
 
-    clearCart();
+      setOrderPlaced({ id: orderNumber });
+
+      try {
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.6 },
+        });
+      } catch {
+        // ignore
+      }
+
+      clearCart();
+    } catch (err) {
+      console.error('Error submitting order', err);
+      // still proceed
+      setOrderPlaced({ id: orderNumber });
+      clearCart();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleClose = () => {

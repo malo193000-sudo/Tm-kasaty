@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Store settings and content (Hero, Products, Texts, FAQs, Articles)
+    match /store_settings/{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Customer orders
+    match /orders/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

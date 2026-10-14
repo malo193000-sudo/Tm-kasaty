@@ -15,6 +15,9 @@ import {
   HelpCircle,
   Heart,
   ChevronDown,
+  Cloud,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -29,6 +32,7 @@ export const Header: React.FC = () => {
     cartTotal,
     setIsCartOpen,
     setIsAdminModalOpen,
+    syncStatus,
   } = useStore();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -187,6 +191,33 @@ export const Header: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Cloud Sync Status Indicator */}
+            <div
+              className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                syncStatus === 'synced'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : syncStatus === 'saving'
+                  ? 'bg-purple-50 text-purple-700 border-purple-200 animate-pulse'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+              title={
+                syncStatus === 'synced'
+                  ? 'متصل ومتزامن مع Firebase سحابياً'
+                  : syncStatus === 'saving'
+                  ? 'جاري الحفظ في السحابة...'
+                  : 'يعمل محلياً وسيعاد الاتصال تلقائياً'
+              }
+            >
+              {syncStatus === 'saving' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-600" />
+              ) : syncStatus === 'synced' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Cloud className="w-3.5 h-3.5 text-amber-600" />
+              )}
+              <span>{syncStatus === 'synced' ? 'سحابي متصل' : syncStatus === 'saving' ? 'جاري الحفظ...' : 'حفظ محلي'}</span>
             </div>
 
             {/* Quick Inline Edit Toggle */}

@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { StoreConfig, Product, CartItem, Review, FaqItem, Article } from '../types/store';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { StoreConfig, Product, CartItem, Review, FaqItem, Article, OrderRecord } from '../types/store';
 import { initialStoreConfig } from '../data/initialData';
+import { db } from '../firebase';
+import { doc, getDoc, setDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
 
 export type CurrencyType = 'EGP' | 'SAR' | 'AED' | 'USD';
 
@@ -23,6 +25,8 @@ interface ImageEditorTarget {
   label?: string;
 }
 
+export type CloudSyncStatus = 'synced' | 'saving' | 'offline' | 'error';
+
 interface StoreContextType {
   config: StoreConfig;
   editMode: boolean;
@@ -31,6 +35,8 @@ interface StoreContextType {
   setCurrency: (c: CurrencyType) => void;
   formatPrice: (egpPrice: number) => string;
   convertPrice: (egpPrice: number) => number;
+  syncStatus: CloudSyncStatus;
+  forceSyncToCloud: () => Promise<void>;
   
   // Cart
   cartItems: CartItem[];
@@ -76,6 +82,11 @@ interface StoreContextType {
   closeImageEditor: () => void;
   updateImageAtPath: (path: string, newUrl: string) => void;
 
+  // Orders Management (Firebase)
+  orders: OrderRecord[];
+  submitNewOrder: (order: Omit<OrderRecord, 'id' | 'createdAt' | 'status'>) => Promise<string>;
+  updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>;
+
   // CMS functions
   updateField: (path: string, value: any) => void;
   updateProduct: (id: string, updated: Partial<Product>) => void;
@@ -99,6 +110,7 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 const STORAGE_KEY = 'kasaty_store_config_v1';
 const CART_STORAGE_KEY = 'kasaty_cart_items_v1';
+const FIRESTORE_DOC_PATH = 'main_config';
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [config, setConfig] = useState<StoreConfig>(() => {
@@ -116,6 +128,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [editMode, setEditMode] = useState<boolean>(false);
   const [currency, setCurrency] = useState<CurrencyType>('EGP');
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('saving');
+
+  // Orders from Firebase
+  const [orders, setOrders] = useState<OrderRecord[]>([]);
 
   const [cartItems, setCartItems] = useState<CartItem[]>(() => {
     try {
@@ -143,16 +159,102 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [editingImageTarget, setEditingImageTarget] = useState<ImageEditorTarget | null>(null);
 
-  // Save config on changes
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch (e) {
-      console.error('Error saving config', e);
-    }
-  }, [config]);
+  const isSavingToCloudRef = useRef(false);
 
-  // Save cart on changes
+  // 1. Listen to real-time updates from Firebase Firestore
+  useEffect(() => {
+    let unsubscribeConfig: (() => void) | undefined;
+    let unsubscribeOrders: (() => void) | undefined;
+
+    try {
+      const docRef = doc(db, 'store_settings', FIRESTORE_DOC_PATH);
+      unsubscribeConfig = onSnapshot(
+        docRef,
+        async (docSnap) => {
+          if (docSnap.exists()) {
+            const cloudData = docSnap.data() as StoreConfig;
+            // Only update if we are not in the middle of our own push to prevent flickering
+            if (!isSavingToCloudRef.current) {
+              setConfig((prev) => ({ ...prev, ...cloudData }));
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudData));
+              } catch (err) {
+                console.warn('LocalStorage save failed', err);
+              }
+            }
+            setSyncStatus('synced');
+          } else {
+            // First time ever: initialize Firestore with initialStoreConfig
+            console.log('Firebase store document does not exist yet. Seeding default data...');
+            setSyncStatus('saving');
+            await setDoc(docRef, initialStoreConfig);
+            setSyncStatus('synced');
+          }
+        },
+        (error) => {
+          console.warn('Firestore onSnapshot error (falling back to local cache):', error);
+          setSyncStatus('offline');
+        }
+      );
+
+      // Listen to Orders in real-time
+      const ordersCol = collection(db, 'orders');
+      unsubscribeOrders = onSnapshot(
+        ordersCol,
+        (snapshot) => {
+          const list: OrderRecord[] = [];
+          snapshot.forEach((d) => {
+            list.push({ id: d.id, ...d.data() } as OrderRecord);
+          });
+          // Sort latest first
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(list);
+        },
+        (err) => {
+          console.warn('Firestore orders sync notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Could not initialize Firebase listener:', e);
+      setSyncStatus('offline');
+    }
+
+    return () => {
+      if (unsubscribeConfig) unsubscribeConfig();
+      if (unsubscribeOrders) unsubscribeOrders();
+    };
+  }, []);
+
+  // Save changes to Firebase Firestore and localStorage
+  const saveConfig = async (newConfig: StoreConfig) => {
+    setConfig(newConfig);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+    } catch (e) {
+      console.warn('LocalStorage save error', e);
+    }
+
+    setSyncStatus('saving');
+    isSavingToCloudRef.current = true;
+    try {
+      const docRef = doc(db, 'store_settings', FIRESTORE_DOC_PATH);
+      await setDoc(docRef, newConfig);
+      setSyncStatus('synced');
+    } catch (error) {
+      console.warn('Failed to save to Firestore (saved locally):', error);
+      setSyncStatus('error');
+    } finally {
+      setTimeout(() => {
+        isSavingToCloudRef.current = false;
+      }, 500);
+    }
+  };
+
+  const forceSyncToCloud = async () => {
+    await saveConfig(config);
+  };
+
+  // Cart LocalStorage
   useEffect(() => {
     try {
       localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
@@ -225,7 +327,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const cartSubtotal = cartItems.reduce((acc, curr) => acc + curr.pricePerUnit * curr.quantity, 0);
   const cartDiscount = Math.round((cartSubtotal * discountPercent) / 100);
   const cartTotal = Math.max(0, cartSubtotal - cartDiscount);
-  // Free shipping if 3 or more stories are ordered
   const freeShippingQualified = storiesCount >= 3;
 
   const openCustomizer = (product: Product) => {
@@ -267,112 +368,152 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     closeImageEditor();
   };
 
+  // Submit order to Firebase
+  const submitNewOrder = async (orderData: Omit<OrderRecord, 'id' | 'createdAt' | 'status'>): Promise<string> => {
+    const newRecord: Omit<OrderRecord, 'id'> = {
+      ...orderData,
+      status: 'new',
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      const docRef = await addDoc(collection(db, 'orders'), newRecord);
+      return docRef.id;
+    } catch (err) {
+      console.warn('Failed to save order to Firestore (saved locally fallback):', err);
+      // Fallback local save
+      const fallbackId = 'local_' + Date.now();
+      setOrders((prev) => [{ id: fallbackId, ...newRecord }, ...prev]);
+      return fallbackId;
+    }
+  };
+
+  const updateOrderStatus = async (orderId: string, status: OrderRecord['status']) => {
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { status });
+    } catch (e) {
+      console.warn('Failed to update order status in Firebase', e);
+    }
+    setOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, status } : o))
+    );
+  };
+
   // Helper to update deep path (e.g. 'heroTitle' or 'promoBanner.title' or 'products.0.title')
   const updateField = (path: string, value: any) => {
-    setConfig((prev) => {
-      const clone = JSON.parse(JSON.stringify(prev));
-      const parts = path.split('.');
-      let current = clone;
-      for (let i = 0; i < parts.length - 1; i++) {
-        const part = parts[i];
-        if (current[part] === undefined) {
-          current[part] = {};
-        }
-        current = current[part];
+    const clone = JSON.parse(JSON.stringify(config));
+    const parts = path.split('.');
+    let current = clone;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i];
+      if (current[part] === undefined) {
+        current[part] = {};
       }
-      current[parts[parts.length - 1]] = value;
-      return clone;
-    });
+      current = current[part];
+    }
+    current[parts[parts.length - 1]] = value;
+    saveConfig(clone);
   };
 
   const updateProduct = (id: string, updated: Partial<Product>) => {
-    setConfig((prev) => ({
-      ...prev,
-      products: prev.products.map((p) => (p.id === id ? { ...p, ...updated } : p)),
-    }));
+    const newConfig = {
+      ...config,
+      products: config.products.map((p) => (p.id === id ? { ...p, ...updated } : p)),
+    };
+    saveConfig(newConfig);
   };
 
   const addProduct = (newProduct: Product) => {
-    setConfig((prev) => ({
-      ...prev,
-      products: [newProduct, ...prev.products],
-    }));
+    const newConfig = {
+      ...config,
+      products: [newProduct, ...config.products],
+    };
+    saveConfig(newConfig);
   };
 
   const deleteProduct = (id: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      products: prev.products.filter((p) => p.id !== id),
-    }));
+    const newConfig = {
+      ...config,
+      products: config.products.filter((p) => p.id !== id),
+    };
+    saveConfig(newConfig);
   };
 
   const updateReview = (id: string, updated: Partial<Review>) => {
-    setConfig((prev) => ({
-      ...prev,
-      reviews: prev.reviews.map((r) => (r.id === id ? { ...r, ...updated } : r)),
-    }));
+    const newConfig = {
+      ...config,
+      reviews: config.reviews.map((r) => (r.id === id ? { ...r, ...updated } : r)),
+    };
+    saveConfig(newConfig);
   };
 
   const addReview = (newReview: Review) => {
-    setConfig((prev) => ({
-      ...prev,
-      reviews: [newReview, ...prev.reviews],
-    }));
+    const newConfig = {
+      ...config,
+      reviews: [newReview, ...config.reviews],
+    };
+    saveConfig(newConfig);
   };
 
   const deleteReview = (id: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      reviews: prev.reviews.filter((r) => r.id !== id),
-    }));
+    const newConfig = {
+      ...config,
+      reviews: config.reviews.filter((r) => r.id !== id),
+    };
+    saveConfig(newConfig);
   };
 
   const updateFaq = (id: string, updated: Partial<FaqItem>) => {
-    setConfig((prev) => ({
-      ...prev,
-      faqs: prev.faqs.map((f) => (f.id === id ? { ...f, ...updated } : f)),
-    }));
+    const newConfig = {
+      ...config,
+      faqs: config.faqs.map((f) => (f.id === id ? { ...f, ...updated } : f)),
+    };
+    saveConfig(newConfig);
   };
 
   const addFaq = (newFaq: FaqItem) => {
-    setConfig((prev) => ({
-      ...prev,
-      faqs: [...prev.faqs, newFaq],
-    }));
+    const newConfig = {
+      ...config,
+      faqs: [...config.faqs, newFaq],
+    };
+    saveConfig(newConfig);
   };
 
   const deleteFaq = (id: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      faqs: prev.faqs.filter((f) => f.id !== id),
-    }));
+    const newConfig = {
+      ...config,
+      faqs: config.faqs.filter((f) => f.id !== id),
+    };
+    saveConfig(newConfig);
   };
 
   const updateArticle = (id: string, updated: Partial<Article>) => {
-    setConfig((prev) => ({
-      ...prev,
-      articles: prev.articles.map((a) => (a.id === id ? { ...a, ...updated } : a)),
-    }));
+    const newConfig = {
+      ...config,
+      articles: config.articles.map((a) => (a.id === id ? { ...a, ...updated } : a)),
+    };
+    saveConfig(newConfig);
   };
 
   const addArticle = (newArticle: Article) => {
-    setConfig((prev) => ({
-      ...prev,
-      articles: [newArticle, ...prev.articles],
-    }));
+    const newConfig = {
+      ...config,
+      articles: [newArticle, ...config.articles],
+    };
+    saveConfig(newConfig);
   };
 
   const deleteArticle = (id: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      articles: prev.articles.filter((a) => a.id !== id),
-    }));
+    const newConfig = {
+      ...config,
+      articles: config.articles.filter((a) => a.id !== id),
+    };
+    saveConfig(newConfig);
   };
 
   const resetToDefault = () => {
-    if (window.confirm('هل أنت متأكد من استعادة المحتوى الافتراضي لمتجر قصتي؟')) {
-      setConfig(initialStoreConfig);
-      localStorage.removeItem(STORAGE_KEY);
+    if (window.confirm('هل أنت متأكد من استعادة المحتوى الافتراضي لمتجر قصتي في السحابة؟')) {
+      saveConfig(initialStoreConfig);
     }
   };
 
@@ -390,7 +531,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       const parsed = JSON.parse(jsonString);
       if (parsed && parsed.products && parsed.storeName) {
-        setConfig(parsed);
+        saveConfig(parsed);
         return true;
       }
     } catch (e) {
@@ -409,6 +550,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setCurrency,
         formatPrice,
         convertPrice,
+        syncStatus,
+        forceSyncToCloud,
         cartItems,
         addToCart,
         removeFromCart,
@@ -444,6 +587,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         openImageEditor,
         closeImageEditor,
         updateImageAtPath,
+        orders,
+        submitNewOrder,
+        updateOrderStatus,
         updateField,
         updateProduct,
         addProduct,
