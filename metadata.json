@@ -1,0 +1,8 @@
+{
+  "name": "قصتي | متجر قصص أطفال مخصصة",
+  "description": "متجر قصتي - قصص أطفال مخصصة باسم وصورة طفلك مع لوحة تحكم متكاملة لتعديل وتغيير النصوص والصور والمنتجات في أي وقت.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
